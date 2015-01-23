@@ -23,6 +23,8 @@
 #include <linux/pnp.h>
 #include <linux/list.h>
 #include <linux/kallsyms.h>
+#include <linux/string.h>
+#include <linux/ctype.h>
 #include "psmouse.h"
 #include "focaltech.h"
 
@@ -33,6 +35,63 @@ static const char * const focaltech_pnp_ids[] = {
 	NULL
 };
 
+static int compare_func(const char *ida, const char *idb)
+{
+	int i;
+
+	/* we only need to compare the last 4 chars */
+	for (i = 3; i < 7; i++) {
+		if (ida[i] != 'X' &&
+		    idb[i] != 'X' && toupper(ida[i]) != toupper(idb[i]))
+			return 0;
+	}
+	return 1;
+}
+
+int compare_pnp_id(struct pnp_id *pos, const char *id)
+{
+	if (!pos || !id || (strlen(id) != 7))
+		return 0;
+	if (memcmp(id, "ANYDEVS", 7) == 0)
+		return 1;
+	while (pos) {
+		if (memcmp(pos->id, id, 3) == 0)
+			if (compare_func(pos->id, id) == 1)
+				return 1;
+		pos = pos->next;
+	}
+	return 0;
+}
+
+static int bus_cb_dev(struct device *dev, void *data)
+{
+    int *found;
+    struct pnp_dev *pnp_dev;
+    int i;
+
+    found = (int *) data;
+    if (*found != 0) {
+    	return 0;
+    }
+
+    printk(KERN_INFO "[focaltech] device type = %s", dev->type->name);
+
+    pnp_dev = container_of(dev, struct pnp_dev, dev);
+    if (!pnp_dev) {
+	printk(KERN_INFO "[focaltech] no pnp_dev");
+	return 0;
+    }
+
+    for (i = 0; focaltech_pnp_ids[i]; i++) {
+    	if (compare_pnp_id(pnp_dev->id, focaltech_pnp_ids[i]) != 0) {
+    	    *found = 1;
+    	    break;
+	}
+    }
+
+    return 0;
+}
+
 /*
  * Even if the kernel is built without support for Focaltech PS/2 touchpads (or
  * when the real driver fails to recognize the device), we still have to detect
@@ -41,11 +100,20 @@ static const char * const focaltech_pnp_ids[] = {
  */
 int focaltech_detect(struct psmouse *psmouse, bool set_properties)
 {
-	struct pnp_dev *dev;
-	unsigned long sym_addr;
-	struct list_head *pnp_global;
-	int (*compare_pnp_id) (struct pnp_id *, const char *);
-	int i, found = 0;
+	struct bus_type *bus;
+	int ret, found = 0;
+
+	if (!psmouse) {
+	    psmouse_err(psmouse, "psmouse is NULL");
+	    return -ENODEV;
+	}
+	if (!psmouse->ps2dev.serio) {
+	    psmouse_err(psmouse, "psmouse->ps2dev.serio is NULL");
+	    return -ENODEV;
+	}
+	bus = psmouse->ps2dev.serio->dev.bus;
+
+	ret = bus_for_each_dev(bus, NULL, &found, bus_cb_dev);
 
 	/* This code implements a workaround to correctly detect
 	 * the Focaltech touchpad on a muxed port.
@@ -55,6 +123,7 @@ int focaltech_detect(struct psmouse *psmouse, bool set_properties)
 	 * The code below loops on all pnp devices and tests if any
 	 * pnp_id matches one referenced in the focaltech_pnp_ids array
 	 */
+	/*
 	sym_addr = kallsyms_lookup_name("pnp_global");
 	if (!sym_addr) {
 	    psmouse_err(psmouse, "cannot resolve pnp_global symbol");
@@ -79,6 +148,7 @@ int focaltech_detect(struct psmouse *psmouse, bool set_properties)
 		}
 	    }
 	}
+	*/
 
 	/* Original check, will not work on a muxed port before commit
 	 * 266e43c4eb81440e81da6c51bc5d4f9be2b7839c */
